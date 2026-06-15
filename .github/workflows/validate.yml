@@ -25,7 +25,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-22.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - name: Initialize artifacts
         run: |
@@ -47,18 +47,31 @@ jobs:
           set -x
           sudo apt-get update -y
           sudo apt-get install -y adb || true
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
-          sudo modprobe binder_linux devices="binder,hwbinder,vndbinder" \
-            || sudo modprobe binder || true
-          ls -l /dev/binder* || echo "WARN: no binder nodes; redroid may not boot"
+          if ! modinfo binder_linux >/dev/null 2>&1; then
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
+          grep -w binder /proc/filesystems
+
+          sudo mkdir -p /dev/binderfs
+          if ! mountpoint -q /dev/binderfs; then
+            sudo mount -t binder binder /dev/binderfs
+          fi
+          ls -la /dev/binderfs
+          for device in binder hwbinder vndbinder; do
+            test -c "/dev/binderfs/$device"
+          done
 
       - name: Start redroid arm64
         run: |
           set -x
-          timeout 10m docker pull "${{ inputs.redroid_tag }}"
+          timeout 6m docker pull "${{ inputs.redroid_tag }}"
           docker image inspect "${{ inputs.redroid_tag }}" --format '{{json .Architecture}} {{json .Os}}'
           docker run -d --privileged --name redroid \
             -p 5555:5555 \
+            --device /dev/binderfs/binder:/dev/binder \
+            --device /dev/binderfs/hwbinder:/dev/hwbinder \
+            --device /dev/binderfs/vndbinder:/dev/vndbinder \
             "${{ inputs.redroid_tag }}" \
             androidboot.redroid_width=1280 \
             androidboot.redroid_height=720 \
