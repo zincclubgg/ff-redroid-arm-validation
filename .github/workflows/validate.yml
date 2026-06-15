@@ -1,31 +1,39 @@
 name: Validate redroid arm64 + Free Fire
 
-# Roda num runner ARM64 GRATIS (repos publicos). Sobe redroid arm64 (Android
-# nativo, sem traducao x86), instala o FF e checa se ele PASSA do anti-cheat
-# (o ponto que crashava no x86 com PR_SET_SECCOMP).
-#
-# Dispare manualmente (Actions -> Validate -> Run workflow) passando a URL do APK.
+# Compatibility check only. The workflow starts redroid arm64, installs the APK
+# from a draft release asset, launches the game, and uploads logs/screenshots.
 
 on:
   workflow_dispatch:
     inputs:
-      apk_url:
-        description: "URL de download direto do APK universal do Free Fire"
-        required: true
+      release_tag:
+        description: "Draft release tag containing freefire.apk"
+        required: false
+        default: "ff-apk-v1"
       redroid_tag:
-        description: "Tag da imagem redroid arm64"
+        description: "redroid arm64 image tag"
         required: false
         default: "redroid/redroid:11.0.0-arm64"
       observe_seconds:
-        description: "Segundos observando o processo apos o launch"
+        description: "Seconds to observe the game process after launch"
         required: false
         default: "150"
+
+permissions:
+  contents: read
 
 jobs:
   validate:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 45
     steps:
+      - name: Initialize artifacts
+        run: |
+          : > result.txt
+          : > exit-info.txt
+          : > crash.log
+          : > grep.log
+
       - name: Host info
         run: |
           set -x
@@ -39,13 +47,12 @@ jobs:
           set -x
           sudo apt-get update -y
           sudo apt-get install -y adb || true
-          # binder costuma estar em linux-modules-extra do kernel atual
           sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
           sudo modprobe binder_linux devices="binder,hwbinder,vndbinder" \
             || sudo modprobe binder || true
-          ls -l /dev/binder* || echo "AVISO: sem nodes de binder — redroid pode nao bootar"
+          ls -l /dev/binder* || echo "WARN: no binder nodes; redroid may not boot"
 
-      - name: Start redroid (arm64 nativo)
+      - name: Start redroid arm64
         run: |
           set -x
           docker run -d --privileged --name redroid \
@@ -56,60 +63,71 @@ jobs:
             androidboot.redroid_dpi=240 \
             androidboot.redroid_gpu_mode=guest
           sleep 25
-          docker logs redroid 2>&1 | tail -60
+          docker logs redroid 2>&1 | tail -80
 
-      - name: Connect ADB + wait boot
+      - name: Connect ADB and wait boot
         run: |
           set -x
           adb start-server
           adb connect localhost:5555
           for i in $(seq 1 60); do
-            b=$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            echo "try $i boot_completed=[$b]"
-            [ "$b" = "1" ] && break
+            booted=$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "try $i boot_completed=[$booted]"
+            [ "$booted" = "1" ] && break
             sleep 5
           done
-          echo "ABI nativa do device:"
+          echo "Native ABI:"
           adb -s localhost:5555 shell getprop ro.product.cpu.abi
           adb -s localhost:5555 shell getprop ro.product.cpu.abilist
 
-      - name: Download + install Free Fire
+      - name: Download and install Free Fire
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -x
-          curl -L --fail -o ff.apk "${{ inputs.apk_url }}"
+          gh release download "${{ inputs.release_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern freefire.apk \
+            --dir .
           ls -lh ff.apk
           adb -s localhost:5555 install -r ff.apk
 
-      - name: Launch + observe (teste decisivo)
+      - name: Launch and observe
         run: |
           set -x
           adb -s localhost:5555 shell monkey -p com.dts.freefireth -c android.intent.category.LAUNCHER 1
           sleep "${{ inputs.observe_seconds }}"
-          echo "=== processo vivo? ==="
+
+          echo "=== process alive? ==="
           if adb -s localhost:5555 shell "pidof com.dts.freefireth" | grep -q .; then
-            echo "RESULT=FF_ALIVE" | tee -a result.txt
+            echo "RESULT=FF_ALIVE" | tee result.txt
           else
-            echo "RESULT=FF_DIED" | tee -a result.txt
+            echo "RESULT=FF_DIED" | tee result.txt
           fi
+
           echo "=== exit-info ==="
           adb -s localhost:5555 shell dumpsys activity exit-info com.dts.freefireth > exit-info.txt 2>&1 || true
           echo "=== crash buffer ==="
           adb -s localhost:5555 logcat -d -b crash > crash.log 2>&1 || true
-          echo "=== grep anti-cheat/seccomp ==="
-          adb -s localhost:5555 logcat -d 2>/dev/null | grep -iE "seccomp|PR_SET_SECCOMP|GGP|il2cpp|SIGABRT|SIGSEGV|FATAL|ndk_translation" | tail -80 > grep.log || true
+          echo "=== crash/seccomp signals ==="
+          adb -s localhost:5555 logcat -d 2>/dev/null \
+            | grep -iE "seccomp|PR_SET_SECCOMP|GGP|il2cpp|SIGABRT|SIGSEGV|FATAL|ndk_translation" \
+            | tail -120 > grep.log || true
           echo "=== screenshot ==="
           adb -s localhost:5555 exec-out screencap -p > screen.png 2>/dev/null || true
           ls -l screen.png || true
 
-      - name: Veredito
+      - name: Summary
+        if: always()
         run: |
-          echo "## Resultado da validacao" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Validation result" >> "$GITHUB_STEP_SUMMARY"
           cat result.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -iE "seccomp|SIGABRT|SIGSEGV" grep.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "(sem seccomp/abort no log — bom sinal)" >> "$GITHUB_STEP_SUMMARY"
+          grep -iE "seccomp|SIGABRT|SIGSEGV|FATAL" grep.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
+            || echo "(no crash/seccomp signal captured)" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload artefatos
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
