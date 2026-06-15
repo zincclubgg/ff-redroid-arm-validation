@@ -19,7 +19,7 @@ on:
       redroid_tag:
         description: "redroid arm64 image tag"
         required: false
-        default: "redroid/redroid:12.0.0_64only-latest"
+        default: "redroid/redroid:11.0.0-latest"
       observe_seconds:
         description: "Seconds to observe the game process after launch"
         required: false
@@ -86,9 +86,9 @@ jobs:
             androidboot.redroid_height=720 \
             androidboot.redroid_dpi=240 \
             androidboot.redroid_gpu_mode=guest
-          # Log capture em BACKGROUND — docker logs sincrono pendura em D-state.
-          nohup docker logs -f redroid > redroid-container.log 2>&1 &
-          echo "redroid iniciado; readiness via adb (sem docker CLI sincrono)"
+          # NENHUM docker logs aqui: -f (follow) faz o runner esperar pra sempre,
+          # e o one-shot pode pendurar em D-state. Readiness/diagnostico = só adb.
+          echo "redroid container iniciado; readiness via adb (zero docker CLI pos-run)"
           sleep 30
 
       - name: Connect ADB and wait boot
@@ -126,8 +126,6 @@ jobs:
           timeout 5s adb connect "$target" || true
           timeout 20s adb -s "$target" logcat -b all -d > android-logcat.txt 2>&1 || true
           sudo dmesg --ctime | tail -300 > host-dmesg.txt 2>&1 || true
-          echo "=== redroid container log (capturado em background, tail) ==="
-          tail -150 redroid-container.log || true
           echo "=== Android fatal logs ==="
           grep -iE "fatal|abort|binder|servicemanager|hwservicemanager|signal 6|SIGABRT" android-logcat.txt | tail -160 || true
           echo "=== host dmesg (tail) ==="
