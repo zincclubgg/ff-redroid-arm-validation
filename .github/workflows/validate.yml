@@ -3,8 +3,11 @@ name: Validate redroid arm64 + Free Fire
 # Compatibility check only. Starts redroid arm64, installs the APK from a draft
 # release asset, launches the game, and uploads logs/screenshots.
 #
-# Hardened: every step has a hard timeout so nothing can hang the job — on any
-# failure the diagnostics + upload steps still run.
+# IMPORTANT: the privileged redroid container can wedge the Docker daemon, making
+# any synchronous `docker logs/ps/inspect/exec` hang in uninterruptible (D) state
+# that even `timeout` cannot kill. So after `docker run` we NEVER call the docker
+# CLI synchronously — log capture runs in the background and all readiness /
+# diagnostics go through `adb` (a separate process) and host `dmesg`.
 
 on:
   workflow_dispatch:
@@ -36,8 +39,7 @@ jobs:
       - name: Initialize artifacts
         run: |
           for f in result.txt exit-info.txt crash.log grep.log adb-devices.txt \
-                   redroid-container.log redroid-props.txt redroid-processes.txt \
-                   redroid-devices.txt android-logcat.txt android-tombstones.txt host-dmesg.txt; do
+                   redroid-container.log android-logcat.txt host-dmesg.txt; do
             : > "$f"
           done
 
@@ -66,10 +68,9 @@ jobs:
             test -c "/dev/binderfs/$device"
             sudo chmod 666 "/dev/binderfs/$device"
           done
-          stat -c '%A %t:%T %n' /dev/binderfs/binder /dev/binderfs/hwbinder /dev/binderfs/vndbinder
 
       - name: Start redroid arm64
-        timeout-minutes: 10
+        timeout-minutes: 8
         run: |
           set -eux
           timeout --foreground --kill-after=15s 6m docker pull "${{ inputs.redroid_tag }}"
@@ -85,38 +86,28 @@ jobs:
             androidboot.redroid_height=720 \
             androidboot.redroid_dpi=240 \
             androidboot.redroid_gpu_mode=guest
-          sleep 20
-          # toda inspecao de container com timeout — docker logs/inspect podem
-          # pendurar se o container despeja log sem parar ou o daemon trava.
-          timeout 20s docker ps -a || true
-          timeout 30s docker logs --tail 80 redroid > /tmp/redroid-start.log 2>&1 || true
-          echo "--- redroid logs (tail) ---"; tail -80 /tmp/redroid-start.log || true
-          running=$(timeout 10s docker inspect redroid --format '{{.State.Running}}' 2>/dev/null || echo unknown)
-          exitcode=$(timeout 10s docker inspect redroid --format '{{.State.ExitCode}}' 2>/dev/null || echo unknown)
-          echo "container running=$running exit=$exitcode"
-          test "$running" = "true"
+          # Log capture em BACKGROUND — docker logs sincrono pendura em D-state.
+          nohup docker logs -f redroid > redroid-container.log 2>&1 &
+          echo "redroid iniciado; readiness via adb (sem docker CLI sincrono)"
+          sleep 30
 
       - name: Connect ADB and wait boot
-        timeout-minutes: 6
+        timeout-minutes: 7
         run: |
           set -ux
           target="${ADB_TARGET}"
           adb start-server
           booted=""
-          for i in $(seq 1 36); do
-            timeout 3s adb connect "$target" || true
-            state=$(timeout 2s adb -s "$target" get-state 2>&1 || true)
+          for i in $(seq 1 48); do
+            timeout 5s adb connect "$target" || true
+            state=$(timeout 3s adb -s "$target" get-state 2>&1 || true)
             if [ "$state" = "device" ]; then
-              booted=$(timeout 3s adb -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+              booted=$(timeout 4s adb -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
             else
               booted=""
             fi
             echo "try $i state=[$state] boot_completed=[$booted]"
             [ "$booted" = "1" ] && break
-            # a cada 6 tentativas, mostra o progresso do boot do Android
-            if [ $((i % 6)) -eq 0 ]; then
-              echo "--- docker logs (tail) ---"; docker logs --tail 15 redroid 2>&1 || true
-            fi
             sleep 5
           done
           adb devices -l | tee adb-devices.txt
@@ -125,24 +116,22 @@ jobs:
           adb -s "$target" shell getprop ro.product.cpu.abi
           adb -s "$target" shell getprop ro.product.cpu.abilist
 
-      - name: Collect redroid boot diagnostics
+      - name: Boot failure diagnostics (no docker CLI)
         if: failure()
         timeout-minutes: 4
         run: |
-          timeout 15s docker ps -a || true
-          timeout 30s docker logs --tail 400 redroid > redroid-container.log 2>&1 || true
-          timeout 5s docker exec redroid getprop > redroid-props.txt 2>&1 || true
-          timeout 5s docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
-          timeout 10s docker exec redroid logcat -b all -d > android-logcat.txt 2>&1 || true
-          timeout 10s docker exec redroid sh -c \
-            'ls -la /data/tombstones 2>&1; for f in /data/tombstones/tombstone_*; do echo ===$f===; cat "$f"; done' \
-            > android-tombstones.txt 2>&1 || true
+          set -ux
+          target="${ADB_TARGET}"
+          # adb pode estar ok mesmo com daemon docker travado (port-forward via kernel)
+          timeout 5s adb connect "$target" || true
+          timeout 20s adb -s "$target" logcat -b all -d > android-logcat.txt 2>&1 || true
           sudo dmesg --ctime | tail -300 > host-dmesg.txt 2>&1 || true
-          echo "=== redroid container log (tail) ==="; tail -120 redroid-container.log || true
+          echo "=== redroid container log (capturado em background, tail) ==="
+          tail -150 redroid-container.log || true
           echo "=== Android fatal logs ==="
           grep -iE "fatal|abort|binder|servicemanager|hwservicemanager|signal 6|SIGABRT" android-logcat.txt | tail -160 || true
-          echo "=== tombstones ==="; tail -160 android-tombstones.txt || true
-          echo "=== host dmesg ==="; tail -120 host-dmesg.txt || true
+          echo "=== host dmesg (tail) ==="
+          tail -150 host-dmesg.txt || true
 
       - name: Download and install Free Fire
         timeout-minutes: 10
@@ -200,9 +189,5 @@ jobs:
             screen.png
             adb-devices.txt
             redroid-container.log
-            redroid-props.txt
-            redroid-processes.txt
-            redroid-devices.txt
             android-logcat.txt
-            android-tombstones.txt
             host-dmesg.txt
