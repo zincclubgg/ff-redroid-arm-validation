@@ -33,6 +33,11 @@ jobs:
           : > exit-info.txt
           : > crash.log
           : > grep.log
+          : > adb-devices.txt
+          : > redroid-container.log
+          : > redroid-props.txt
+          : > redroid-processes.txt
+          : > host-dmesg.txt
 
       - name: Host info
         run: |
@@ -86,17 +91,45 @@ jobs:
       - name: Connect ADB and wait boot
         run: |
           set -x
+          target=127.0.0.1:5555
           adb start-server
-          adb connect localhost:5555
-          for i in $(seq 1 60); do
-            booted=$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            echo "try $i boot_completed=[$booted]"
+          booted=""
+          for i in $(seq 1 30); do
+            adb connect "$target" || true
+            state=$(adb -s "$target" get-state 2>&1 || true)
+            if [ "$state" = "device" ]; then
+              booted=$(adb -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            else
+              booted=""
+            fi
+            echo "try $i state=[$state] boot_completed=[$booted]"
             [ "$booted" = "1" ] && break
             sleep 5
           done
+          adb devices -l | tee adb-devices.txt
+          test "$booted" = "1"
           echo "Native ABI:"
-          adb -s localhost:5555 shell getprop ro.product.cpu.abi
-          adb -s localhost:5555 shell getprop ro.product.cpu.abilist
+          adb -s "$target" shell getprop ro.product.cpu.abi
+          adb -s "$target" shell getprop ro.product.cpu.abilist
+
+      - name: Collect redroid boot diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker inspect redroid || true
+          docker logs redroid > redroid-container.log 2>&1 || true
+          docker exec redroid getprop > redroid-props.txt 2>&1 || true
+          docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
+          sudo dmesg --ctime | tail -300 > host-dmesg.txt 2>&1 || true
+          adb devices -l > adb-devices.txt 2>&1 || true
+          echo "=== redroid props ==="
+          tail -80 redroid-props.txt || true
+          echo "=== redroid processes ==="
+          tail -80 redroid-processes.txt || true
+          echo "=== redroid logs ==="
+          tail -120 redroid-container.log || true
+          echo "=== host dmesg ==="
+          tail -120 host-dmesg.txt || true
 
       - name: Download and install Free Fire
         env:
@@ -156,3 +189,8 @@ jobs:
             crash.log
             grep.log
             screen.png
+            adb-devices.txt
+            redroid-container.log
+            redroid-props.txt
+            redroid-processes.txt
+            host-dmesg.txt
