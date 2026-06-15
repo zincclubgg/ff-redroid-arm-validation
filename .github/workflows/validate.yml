@@ -68,7 +68,12 @@ jobs:
           ls -la /dev/binderfs
           for device in binder hwbinder vndbinder; do
             test -c "/dev/binderfs/$device"
+            sudo chmod 666 "/dev/binderfs/$device"
           done
+          stat -c '%A %t:%T %n' \
+            /dev/binderfs/binder \
+            /dev/binderfs/hwbinder \
+            /dev/binderfs/vndbinder
 
       - name: Start redroid arm64
         run: |
