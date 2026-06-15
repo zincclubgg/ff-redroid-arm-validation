@@ -37,6 +37,9 @@ jobs:
           : > redroid-container.log
           : > redroid-props.txt
           : > redroid-processes.txt
+          : > redroid-devices.txt
+          : > android-logcat.txt
+          : > android-tombstones.txt
           : > host-dmesg.txt
 
       - name: Host info
@@ -120,6 +123,13 @@ jobs:
           docker logs redroid > redroid-container.log 2>&1 || true
           timeout 5s docker exec redroid getprop > redroid-props.txt 2>&1 || true
           timeout 5s docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
+          timeout 5s docker exec redroid sh -c \
+            'ls -la /dev/binder* /dev/binderfs 2>&1; stat /dev/binder /dev/hwbinder /dev/vndbinder 2>&1' \
+            > redroid-devices.txt 2>&1 || true
+          timeout 10s docker exec redroid logcat -b all -d > android-logcat.txt 2>&1 || true
+          timeout 10s docker exec redroid sh -c \
+            'ls -la /data/tombstones 2>&1; for f in /data/tombstones/tombstone_*; do echo ===$f===; cat "$f"; done' \
+            > android-tombstones.txt 2>&1 || true
           sudo dmesg --ctime | tail -300 > host-dmesg.txt 2>&1 || true
           adb devices -l > adb-devices.txt 2>&1 || true
           echo "=== redroid props ==="
@@ -128,6 +138,12 @@ jobs:
           tail -80 redroid-processes.txt || true
           echo "=== redroid logs ==="
           tail -120 redroid-container.log || true
+          echo "=== binder devices ==="
+          cat redroid-devices.txt || true
+          echo "=== Android fatal logs ==="
+          grep -iE "fatal|abort|binder|servicemanager|hwservicemanager|signal 6|SIGABRT" android-logcat.txt | tail -160 || true
+          echo "=== tombstones ==="
+          tail -160 android-tombstones.txt || true
           echo "=== host dmesg ==="
           tail -120 host-dmesg.txt || true
 
@@ -193,4 +209,7 @@ jobs:
             redroid-container.log
             redroid-props.txt
             redroid-processes.txt
+            redroid-devices.txt
+            android-logcat.txt
+            android-tombstones.txt
             host-dmesg.txt
