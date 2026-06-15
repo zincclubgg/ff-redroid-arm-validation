@@ -94,11 +94,11 @@ jobs:
           target=127.0.0.1:5555
           adb start-server
           booted=""
-          for i in $(seq 1 30); do
-            adb connect "$target" || true
-            state=$(adb -s "$target" get-state 2>&1 || true)
+          for i in $(seq 1 18); do
+            timeout 3s adb connect "$target" || true
+            state=$(timeout 2s adb -s "$target" get-state 2>&1 || true)
             if [ "$state" = "device" ]; then
-              booted=$(adb -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+              booted=$(timeout 2s adb -s "$target" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
             else
               booted=""
             fi
@@ -118,8 +118,8 @@ jobs:
           docker ps -a
           docker inspect redroid || true
           docker logs redroid > redroid-container.log 2>&1 || true
-          docker exec redroid getprop > redroid-props.txt 2>&1 || true
-          docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
+          timeout 5s docker exec redroid getprop > redroid-props.txt 2>&1 || true
+          timeout 5s docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
           sudo dmesg --ctime | tail -300 > host-dmesg.txt 2>&1 || true
           adb devices -l > adb-devices.txt 2>&1 || true
           echo "=== redroid props ==="
