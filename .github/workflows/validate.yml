@@ -78,7 +78,7 @@ jobs:
       - name: Start redroid arm64
         run: |
           set -x
-          timeout 6m docker pull "${{ inputs.redroid_tag }}"
+          timeout --foreground --kill-after=15s 6m docker pull "${{ inputs.redroid_tag }}"
           docker image inspect "${{ inputs.redroid_tag }}" --format '{{json .Architecture}} {{json .Os}}'
           docker run -d --privileged --name redroid \
             -p 5555:5555 \
