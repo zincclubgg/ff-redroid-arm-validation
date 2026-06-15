@@ -13,7 +13,7 @@ on:
       redroid_tag:
         description: "redroid arm64 image tag"
         required: false
-        default: "redroid/redroid:12.0.0-latest"
+        default: "redroid/redroid:12.0.0_64only-latest"
       observe_seconds:
         description: "Seconds to observe the game process after launch"
         required: false
@@ -55,6 +55,8 @@ jobs:
       - name: Start redroid arm64
         run: |
           set -x
+          timeout 10m docker pull "${{ inputs.redroid_tag }}"
+          docker image inspect "${{ inputs.redroid_tag }}" --format '{{json .Architecture}} {{json .Os}}'
           docker run -d --privileged --name redroid \
             -p 5555:5555 \
             "${{ inputs.redroid_tag }}" \
@@ -63,7 +65,10 @@ jobs:
             androidboot.redroid_dpi=240 \
             androidboot.redroid_gpu_mode=guest
           sleep 25
+          docker ps -a
           docker logs redroid 2>&1 | tail -80
+          docker inspect redroid --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}'
+          test "$(docker inspect redroid --format '{{.State.Running}}')" = "true"
 
       - name: Connect ADB and wait boot
         run: |

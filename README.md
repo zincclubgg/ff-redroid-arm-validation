@@ -11,7 +11,7 @@ ficar em uma release draft chamada `ff-apk-v1`, como asset `freefire.apk`.
 1. Suba `freefire.apk` em uma release draft.
 2. Actions -> Validate redroid arm64 + Free Fire -> Run workflow.
 3. Use `release_tag=ff-apk-v1`.
-4. Use o default `redroid/redroid:12.0.0-latest`, que possui variante `linux/arm64`.
+4. Use o default `redroid/redroid:12.0.0_64only-latest`, que possui variante `linux/arm64`.
 5. Ao terminar, baixe o artefato `validation-results` e veja:
    - `result.txt` -> `FF_ALIVE` ou `FF_DIED`.
    - `grep.log` -> sinais de `seccomp`, `SIGABRT`, `SIGSEGV`, `FATAL`.
