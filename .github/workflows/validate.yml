@@ -77,10 +77,11 @@ jobs:
           docker image inspect "${{ inputs.redroid_tag }}" --format '{{json .Architecture}} {{json .Os}}'
           docker run -d --privileged --name redroid \
             -p 5555:5555 \
-            --device /dev/binderfs/binder:/dev/binder \
-            --device /dev/binderfs/hwbinder:/dev/hwbinder \
-            --device /dev/binderfs/vndbinder:/dev/vndbinder \
+            -v /dev/binderfs/binder:/dev/binder \
+            -v /dev/binderfs/hwbinder:/dev/hwbinder \
+            -v /dev/binderfs/vndbinder:/dev/vndbinder \
             "${{ inputs.redroid_tag }}" \
+            androidboot.use_memfd=1 \
             androidboot.redroid_width=1280 \
             androidboot.redroid_height=720 \
             androidboot.redroid_dpi=240 \
