@@ -86,10 +86,15 @@ jobs:
             androidboot.redroid_dpi=240 \
             androidboot.redroid_gpu_mode=guest
           sleep 20
-          docker ps -a
-          docker logs redroid 2>&1 | tail -80
-          docker inspect redroid --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}'
-          test "$(docker inspect redroid --format '{{.State.Running}}')" = "true"
+          # toda inspecao de container com timeout — docker logs/inspect podem
+          # pendurar se o container despeja log sem parar ou o daemon trava.
+          timeout 20s docker ps -a || true
+          timeout 30s docker logs --tail 80 redroid > /tmp/redroid-start.log 2>&1 || true
+          echo "--- redroid logs (tail) ---"; tail -80 /tmp/redroid-start.log || true
+          running=$(timeout 10s docker inspect redroid --format '{{.State.Running}}' 2>/dev/null || echo unknown)
+          exitcode=$(timeout 10s docker inspect redroid --format '{{.State.ExitCode}}' 2>/dev/null || echo unknown)
+          echo "container running=$running exit=$exitcode"
+          test "$running" = "true"
 
       - name: Connect ADB and wait boot
         timeout-minutes: 6
@@ -124,8 +129,8 @@ jobs:
         if: failure()
         timeout-minutes: 4
         run: |
-          docker ps -a || true
-          docker logs redroid > redroid-container.log 2>&1 || true
+          timeout 15s docker ps -a || true
+          timeout 30s docker logs --tail 400 redroid > redroid-container.log 2>&1 || true
           timeout 5s docker exec redroid getprop > redroid-props.txt 2>&1 || true
           timeout 5s docker exec redroid ps -A > redroid-processes.txt 2>&1 || true
           timeout 10s docker exec redroid logcat -b all -d > android-logcat.txt 2>&1 || true
